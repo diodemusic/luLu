@@ -1,4 +1,7 @@
+#!usr/bin/env python3
+# :3
 import discord
+import secret
 
 intents = discord.Intents(messages=True)
 intents.message_content = True
@@ -7,7 +10,7 @@ client = discord.Client(intents=intents)
 
 @client.event
 async def on_ready():
-    print(f"We have logged in as {client.user}")
+    print(f"<{client.user}> online.")
 
 @client.event
 async def on_message(message):
@@ -15,7 +18,7 @@ async def on_message(message):
         return
 
     if message.content.startswith(".hello") and message.content == ".hello":
-        print(f'message from {message.author} "{message.content}" recieved.')
+        print(f"<{message.author}> {message.content}")
         await message.channel.send("hello :)")
 
-client.run("")
+client.run(secret.discordAPIKey)
