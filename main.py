@@ -4,48 +4,56 @@
 from dotenv import load_dotenv
 import os
 import logging
-from datetime import datetime
-import requests
 import discord
 from discord import app_commands
+import math
+import cassiopeia as cass
+from tabulate import tabulate
 
 def configure():
     load_dotenv()
 
 configure()
 
-region = "euw1"
 server_id = os.getenv("serverId")
 discord_api_key = os.getenv("discordAPIKey")
 riot_api_key = os.getenv("riotAPIKey")
+cass.set_riot_api_key(riot_api_key)
 
-def log(string):
-    now = datetime.now()
-    date_time = now.strftime("%Y-%m-%d %H:%M:%S")
-    logging.info(string)
-    print(date_time, string)
+def get_game(region, username):
+    summoner = cass.Summoner(region=region, name=username)
+    active_game = summoner.current_match()
 
-def get_summoner_id(region, username, api_key):
-    champion_id_url = f"https://{region}.api.riotgames.com/lol/summoner/v4/summoners/by-name/{username}?api_key={api_key}"
-    response = requests.get(champion_id_url)
-    champion_id_json = response.json()
-    summoner_id = champion_id_json["id"]
-    return summoner_id
+    stats = []
 
-def get_active_game(region, username, api_key):
-    encrypted_id = get_summoner_id(region, username, api_key)
-    active_game_url = f"https://{region}.api.riotgames.com/lol/spectator/v4/active-games/by-summoner/{encrypted_id}?api_key={api_key}"
-    response = requests.get(active_game_url)
-    active_game_json = response.json()
-    
-    players = [[], []]
-    for participant in active_game_json["participants"]:
-        if participant["teamId"] == 100:
-            players[0].append(participant["summonerName"])
-        elif participant["teamId"] == 200:
-            players[1].append(participant["summonerName"])
-            
-    return players
+    for participant in active_game.participants:
+        participant_stats = {}
+        try:
+            league_entries = participant.summoner.league_entries.fives # todo add to_json() from json module
+            # print(league_entries)
+        except:
+            participant_stats["player"] = participant.summoner.name
+            participant_stats["team"] = participant.side.name
+            participant_stats["rank"] = "N/A"
+            participant_stats["winrate"] = "N/A"
+            stats.append(participant_stats)
+            continue
+        
+        total_games_played = league_entries.wins + league_entries.losses
+        winrate = math.floor(round((league_entries.wins / total_games_played) * 100))
+        
+        participant_stats["player"] = participant.summoner.name
+        participant_stats["team"] = participant.side.name
+        participant_stats["rank"] = f"{league_entries.tier.name} {league_entries.division} {league_entries.league_points}lp"
+        participant_stats["winrate"] = f"{winrate}%"
+        participant_stats["games_played"] = total_games_played
+        participant_stats["hot_streak"] = league_entries.hot_streak
+        # participant_stats["promos"] = league_entries.promos
+        participant_stats["veteran"] = league_entries.veteran
+        
+        stats.append(participant_stats)
+
+    return stats
 
 logging.basicConfig(filename='discord_bot.log', level=logging.INFO, format='%(asctime)s:%(levelname)s:%(message)s')
 
@@ -59,35 +67,27 @@ class aclient(discord.Client):
         if not self.synced:
             await tree.sync(guild=discord.Object(id=server_id))
             self.synced = True
-        log(f"Logged in as {self.user}.")
+        logging.info(f"Logged in as {self.user}.")
 
 client = aclient()
 tree = app_commands.CommandTree(client)
 
 @tree.command(name="ingame", description="Get active game stats", guild=discord.Object(id=server_id))
 async def self(interaction: discord.Interaction, username: str):
-    log(f"<{interaction.user}> /ingame {username}")
+    logging.info(f"<{interaction.user}> /ingame {username}")
     
     try:
-        players = get_active_game(region, username, riot_api_key)
-    except KeyError as e:
-        error_message = f"Player <{username}> is not in an active game."
-        error_log_message = f"Error: KeyError: {e}. Sending: {error_message}"
-        log(error_log_message)
-        await interaction.response.send_message(error_message)
+        stats = get_game("EUW", username)
+    except Exception as err:
+        logging.error(f"Error: {err}.")
+        await interaction.response.send_message(f"Error: {err}.")
         return
     
-    await interaction.response.send_message(f"""```team 1:
-                                            player 1: {players[0][0]}
-                                            player 2: {players[0][1]}
-                                            player 3: {players[0][2]}
-                                            player 4: {players[0][3]}
-                                            player 5: {players[0][4]}```
-                                            ```team 2:
-                                            player 1: {players[1][0]}
-                                            player 2: {players[1][1]}
-                                            player 3: {players[1][2]}
-                                            player 4: {players[1][3]}
-                                            player 5: {players[1][4]}```""")
+    table = tabulate(stats, headers="keys", tablefmt="psql")
+    
+    try:
+        await interaction.response.send_message(f"```{table}```")
+    except Exception as err:
+        logging.error(f"Error: {err}")
 
 client.run(discord_api_key)
